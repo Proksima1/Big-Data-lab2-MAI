@@ -1,0 +1,107 @@
+services:
+  spark-master:
+    image: spark:3.5.2-java17-python3
+    container_name: spark-master
+    hostname: spark-master
+    command: >
+      bash -lc "
+      /opt/spark/sbin/start-master.sh &&
+      tail -f /opt/spark/logs/*"
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+    networks:
+      - spark-net
+
+  spark-worker:
+    image: spark:3.5.2-java17-python3
+    container_name: spark-worker
+    hostname: spark-worker
+    depends_on:
+      - spark-master
+    command: >
+      bash -lc "
+      /opt/spark/sbin/start-worker.sh spark://spark-master:7077 &&
+      tail -f /opt/spark/logs/*"
+    environment:
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 1G
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+    networks:
+      - spark-net
+
+  jupyter:
+    build:
+      context: ./jupyter
+    container_name: jupyter
+    hostname: jupyter
+    depends_on:
+      - spark-master
+      - spark-worker
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./app:/workspace
+    environment:
+      SPARK_MASTER_URL: spark://spark-master:7077
+      PYSPARK_PYTHON: python3
+      PYSPARK_DRIVER_PYTHON: python3
+    networks:
+      - spark-net
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.2.6
+    container_name: clickhouse
+    hostname: clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: app
+      CLICKHOUSE_USER: user
+      CLICKHOUSE_PASSWORD: password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    networks:
+      - spark-net
+
+  postgres:
+    image: postgres:18.3
+    container_name: postgres
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./input_data:/docker-entrypoint-initdb.d/data:ro
+      - ./init_pg/init.sql:/docker-entrypoint-initdb.d/01_init_stage_load.sql:ro
+      - ./init_pg/ddl.sql:/docker-entrypoint-initdb.d/02_create_tables.sql:ro
+    networks:
+      - spark-net
+
+networks:
+  spark-net:
+    driver: bridge
+
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  clickhouse_logs:
